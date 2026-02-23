@@ -1,0 +1,6 @@
+jenkins:
+  - name: local
+    host: http://localhost:8080
+    username: admin
+    token: replace-me
+    insecure_skip_tls_verify: false

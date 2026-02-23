@@ -1,0 +1,9 @@
+FROM jenkins/jenkins:lts-jdk17
+
+USER root
+RUN jenkins-plugin-cli --plugins \
+    workflow-aggregator \
+    workflow-job \
+    job-dsl \
+    configuration-as-code
+USER jenkins

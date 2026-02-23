@@ -1,0 +1,19 @@
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile.jenkins
+    container_name: jenx-dev-jenkins
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false
+      - CASC_JENKINS_CONFIG=/var/jenkins_home/casc.yaml
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - ./dev/init.groovy.d:/usr/share/jenkins/ref/init.groovy.d
+      - ./dev/casc.yaml:/var/jenkins_home/casc.yaml
+
+volumes:
+  jenkins_home:

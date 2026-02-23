@@ -1,0 +1,14 @@
+# Local secrets/config
+jenkins.yaml
+
+# Local binary
+jenx
+
+# Local app metadata
+.codex/
+.DS_Store
+
+# Local caches
+.cache/
+*.cache
+jobs_*.json
