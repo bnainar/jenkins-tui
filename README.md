@@ -1,6 +1,6 @@
-# jenx
+# jenkins-tui
 
-`jenx` is a terminal UI for running Jenkins parameterized pipelines in bulk using value permutations.
+`jenkins-tui` is a terminal UI for running Jenkins parameterized pipelines in bulk using value permutations.
 
 ## What It Does
 
@@ -15,12 +15,7 @@
 
 ## Requirements
 
-- ASDF with `golang` plugin
-- `.tool-versions` is pinned to:
-
-```txt
-golang 1.26
-```
+- **Docker only** — no Go or other dev tools required. All build, test, and code targets run inside Docker.
 
 ## Configuration
 
@@ -47,19 +42,19 @@ Notes:
 
 ## Run
 
-Using Make:
-
 ```bash
-make build
 make run
 ```
 
-Or directly:
+This builds the binary in Docker and runs it on your machine. If you can't run the built binary (e.g. Windows without WSL), use `make run-docker` to run entirely inside a container.
+
+Run tests:
 
 ```bash
-go build ./cmd/jenx
-./jenx
+make test
 ```
+
+Note: when using `make run-docker`, opening URLs with `o` may not launch a browser on the host.
 
 ## TUI Flow
 
@@ -91,7 +86,7 @@ Done screen:
 
 ## Cache
 
-Job discovery cache is stored under your OS user cache directory (for example macOS: `~/Library/Caches/jenx`).
+Job discovery cache is stored in Docker volume `jenkins-tui_app_cache` (`/root/.cache/jenkins-tui` inside the runtime container).
 
 - TTL: `24h`
 - Cache key: Jenkins `host + username`
@@ -106,16 +101,19 @@ make docker-up
 ./dev/scripts/create-token.sh > jenkins.yaml
 ```
 
-Then run `make run` and select the seeded job.
+Then run `make run`.
+
+Since `jenkins-tui` runs in a container, set `jenkins.yaml` host to `http://host.docker.internal:8080` instead of `http://localhost:8080`.
 
 ## Make Targets
 
-- `make build`
-- `make run`
-- `make test`
-- `make tidy`
-- `make fmt`
-- `make clean`
-- `make docker-up`
-- `make docker-down`
-- `make docker-logs`
+- `make build` — build binary in Docker (output for your OS)
+- `make run` — build then run the binary on the host
+- `make run-docker` — build and run entirely inside Docker (use if host binary won't run)
+- `make test` — run tests in Docker
+- `make tidy` — go mod tidy in Docker
+- `make fmt` — go fmt in Docker
+- `make clean` — remove built binary
+- `make docker-up` — start local Jenkins (dev)
+- `make docker-down` — stop local Jenkins
+- `make docker-logs` — follow Jenkins logs

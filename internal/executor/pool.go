@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"jenx/internal/jenkins"
-	"jenx/internal/models"
+	"jenkins-tui/internal/jenkins"
+	"jenkins-tui/internal/models"
 )
 
 func Run(ctx context.Context, client *jenkins.Client, jobURL string, specs []models.JobSpec, concurrency int, out chan<- models.RunUpdate) {

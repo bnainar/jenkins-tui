@@ -1,5 +1,5 @@
 jenkins:
-  systemMessage: "jenx local Jenkins"
+  systemMessage: "jenkins-tui local Jenkins"
   securityRealm:
     local:
       allowsSignup: false

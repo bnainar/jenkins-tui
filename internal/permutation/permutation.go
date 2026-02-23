@@ -3,7 +3,7 @@ package permutation
 import (
 	"fmt"
 
-	"jenx/internal/models"
+	"jenkins-tui/internal/models"
 )
 
 type Input struct {

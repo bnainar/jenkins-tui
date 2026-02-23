@@ -2,7 +2,7 @@
 jenkins.yaml
 
 # Local binary
-jenx
+jenkins-tui
 
 # Local app metadata
 .codex/

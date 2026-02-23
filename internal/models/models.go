@@ -12,6 +12,7 @@ type JenkinsTarget struct {
 
 type Config struct {
 	Jenkins []JenkinsTarget `yaml:"jenkins"`
+	Timeout time.Duration   `yaml:"-"`
 }
 
 type JobRef struct {

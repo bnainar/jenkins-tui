@@ -7,7 +7,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"jenx/internal/models"
+	"jenkins-tui/internal/models"
 )
 
 func Load(path string) (models.Config, error) {

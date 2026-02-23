@@ -14,13 +14,13 @@ import (
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/lipgloss"
 
-	"jenx/internal/browser"
-	"jenx/internal/cache"
-	"jenx/internal/executor"
-	"jenx/internal/jenkins"
-	"jenx/internal/models"
-	"jenx/internal/permutation"
-	"jenx/internal/ui"
+	"jenkins-tui/internal/browser"
+	"jenkins-tui/internal/cache"
+	"jenkins-tui/internal/executor"
+	"jenkins-tui/internal/jenkins"
+	"jenkins-tui/internal/models"
+	"jenkins-tui/internal/permutation"
+	"jenkins-tui/internal/ui"
 )
 
 type screen int
@@ -110,9 +110,9 @@ type model struct {
 func NewModel(ctx context.Context, cfg models.Config) tea.Model {
 	items := make([]list.Item, 0, len(cfg.Jenkins))
 	for idx, j := range cfg.Jenkins {
-		desc := j.Host
-		if strings.TrimSpace(j.Name) != "" {
-			desc = fmt.Sprintf("%s (%s)", j.Name, j.Host)
+		desc := j.Username
+		if strings.TrimSpace(desc) == "" {
+			desc = j.Host
 		}
 		items = append(items, listItem{title: fmt.Sprintf("%d. %s", idx+1, j.Name), desc: desc, id: j.Host})
 	}
@@ -265,7 +265,7 @@ func (m *model) updateServers(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) 
 				return m, tea.Batch(cmds...)
 			}
 			m.target = t
-			m.client = jenkins.NewClient(*t)
+			m.client = jenkins.NewClient(*t, m.cfg.Timeout)
 			m.loading = true
 			m.loadingStart = time.Now()
 			m.loadingLabel = "Loading jobs"
@@ -297,8 +297,12 @@ func (m *model) updateJobs(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 			m.loadingLabel = "Loading pipeline parameters"
 			m.status = "Loading pipeline parameters..."
 			return m, tea.Batch(append(cmds, loadParamsCmd(m.ctx, m.client, job.URL))...)
-		case "esc", "backspace":
+		case "esc":
 			m.screen = screenServers
+		case "backspace":
+			if !m.jobs.SettingFilter() {
+				m.screen = screenServers
+			}
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -394,7 +398,7 @@ func (m *model) View() string {
 		body = m.runTable.View()
 	}
 
-	title := "jenx - Jenkins Permutation Runner"
+	title := "jenkins-tui - Jenkins Permutation Runner"
 	if m.target != nil {
 		title += " | " + m.target.Name
 	}

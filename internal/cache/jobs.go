@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"jenx/internal/models"
+	"jenkins-tui/internal/models"
 )
 
 const (
@@ -69,5 +69,5 @@ func jobsPath(cacheKey string) (string, error) {
 	}
 	sum := sha1.Sum([]byte(cacheKey))
 	file := "jobs_" + hex.EncodeToString(sum[:]) + ".json"
-	return filepath.Join(base, "jenx", file), nil
+	return filepath.Join(base, "jenkins-tui", file), nil
 }

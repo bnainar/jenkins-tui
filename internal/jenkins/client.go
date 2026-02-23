@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"jenx/internal/models"
+	"jenkins-tui/internal/models"
 )
 
 type Client struct {
@@ -27,7 +27,7 @@ type crumb struct {
 	Value string `json:"crumb"`
 }
 
-func NewClient(target models.JenkinsTarget) *Client {
+func NewClient(target models.JenkinsTarget, timeout time.Duration) *Client {
 	transport := &http.Transport{}
 	if target.InsecureSkipTLSVerify {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
@@ -35,7 +35,7 @@ func NewClient(target models.JenkinsTarget) *Client {
 	return &Client{
 		target: target,
 		http: &http.Client{
-			Timeout:   15 * time.Second,
+			Timeout:   timeout,
 			Transport: transport,
 		},
 	}

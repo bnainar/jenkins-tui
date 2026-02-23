@@ -1,6 +1,8 @@
+# Copy to jenkins.yaml and fill in your Jenkins host and API token.
+# jenkins.yaml is git-ignored.
 jenkins:
-  - name: local
-    host: http://localhost:8080
-    username: admin
-    token: replace-me
+  - name: prod
+    host: https://jenkins.example.com
+    username: your-user
+    token: your-api-token
     insecure_skip_tls_verify: false

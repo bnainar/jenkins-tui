@@ -1,4 +1,4 @@
-module jenx
+module jenkins-tui
 
 go 1.21
 
