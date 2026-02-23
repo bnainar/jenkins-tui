@@ -1,59 +1,121 @@
 # jenx
 
-Minimal Jenkins permutation runner TUI built with Charmbracelet.
+`jenx` is a terminal UI for running Jenkins parameterized pipelines in bulk using value permutations.
 
-## Features
+## What It Does
 
-- Load multiple Jenkins targets from `jenkins.yaml`
-- Pick one Jenkins and one parameterized pipeline job
-- Multi-select `Choice` params to generate permutations
-- Keep non-choice params fixed across all permutations
-- Preview all generated job specs (hard limit: 20)
-- Trigger and track builds with concurrency `4`
-- Show queue/build URLs and open selected build in browser (`o`)
-- Retry failed jobs only from completion screen (`r`)
+- Loads Jenkins instances from local `jenkins.yaml`
+- Lets you pick a Jenkins host, then a parameterized pipeline
+- Supports multi-select on Jenkins `Choice` params
+- Generates cartesian permutations (hard limit: `20` runs)
+- Executes all generated runs with concurrency `4`
+- Tracks queue/build status until completion
+- Shows build URLs and opens selected URL in browser (`o`)
+- Caches discovered jobs locally with a 24h TTL for faster startup
 
 ## Requirements
 
 - ASDF with `golang` plugin
-- Go pinned via `.tool-versions` (`golang 1.26`)
+- `.tool-versions` is pinned to:
 
-## Setup
+```txt
+golang 1.26
+```
 
-1. Create config from example:
+## Configuration
+
+Create local config (not committed):
 
 ```bash
 cp jenkins.example.yaml jenkins.yaml
 ```
 
-2. Build:
+`jenkins.yaml` format:
+
+```yaml
+jenkins:
+  - name: prod
+    host: https://jenkins.example.com
+    username: your-user
+    token: your-api-token
+    insecure_skip_tls_verify: false
+```
+
+Notes:
+- `jenkins.yaml` is ignored by git.
+- Use Jenkins API token auth (`username` + `token`).
+
+## Run
+
+Using Make:
+
+```bash
+make build
+make run
+```
+
+Or directly:
 
 ```bash
 go build ./cmd/jenx
-```
-
-3. Run:
-
-```bash
 ./jenx
 ```
 
-## Local Jenkins (Docker)
+## TUI Flow
 
-Starts Jenkins and seeds one parameterized pipeline `perm-test`.
+1. Select Jenkins host
+2. Select pipeline job (press `/` to filter)
+3. Fill parameters
+- `Choice` params: multi-select
+- Non-choice params: single value reused across all permutations
+4. Review generated permutations
+5. Press `Enter` to execute all
+6. Watch live progress and open links
+
+## Keybindings
+
+Global:
+- `q` quit
+- `ctrl+c` quit
+
+List screens:
+- `/` start filter
+- `enter` select
+- `esc` back/clear
+
+Run screen:
+- `o` open selected build URL
+
+Done screen:
+- `r` prepare rerun for failed items
+
+## Cache
+
+Job discovery cache is stored under your OS user cache directory (for example macOS: `~/Library/Caches/jenx`).
+
+- TTL: `24h`
+- Cache key: Jenkins `host + username`
+
+## Local Jenkins Dev Environment
+
+Bring up local Jenkins and seed a sample parameterized pipeline:
 
 ```bash
-docker compose up -d --build
+make docker-up
 ./dev/scripts/wait-jenkins.sh
 ./dev/scripts/create-token.sh > jenkins.yaml
 ```
 
-Then start `jenx`, select `local`, choose `perm-test`, and run permutations.
+Then run `make run` and select the seeded job.
 
-## Controls
+## Make Targets
 
-- `enter`: select/continue
-- `esc`: back
-- `q`: quit
-- `o`: open selected build URL (run view)
-- `r`: rebuild failed jobs only (done view)
+- `make build`
+- `make run`
+- `make test`
+- `make tidy`
+- `make fmt`
+- `make clean`
+- `make docker-up`
+- `make docker-down`
+- `make docker-logs`
