@@ -162,10 +162,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.servers.SetSize(msg.Width-8, msg.Height-10)
-		m.jobs.SetSize(msg.Width-8, msg.Height-10)
+		m.servers.SetSize(max(0, msg.Width-8), max(0, msg.Height-10))
+		m.jobs.SetSize(max(0, msg.Width-8), max(0, msg.Height-10))
+		if m.paramForm != nil {
+			m.paramForm.WithWidth(max(1, msg.Width-8))
+		}
+		if len(m.permutations) > 0 {
+			m.buildPreviewTable()
+		}
+		if len(m.runRecords) > 0 {
+			m.refreshRunTable()
+		}
 		m.previewTable.SetHeight(max(5, msg.Height-14))
 		m.runTable.SetHeight(max(5, msg.Height-14))
+		cmds = append(cmds, tea.ClearScreen)
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			if m.runCancel != nil {
@@ -217,8 +227,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.jobs.SetItems(items)
 		m.jobs.Title = "Browse Jenkins Jobs: " + jobsPathLabel(typed.prefix)
-		m.screen = screenJobs
-		return m, tea.Batch(append(cmds, tea.ClearScreen)...)
+		return m, m.transition(screenJobs, cmds...)
 	case paramsLoadedMsg:
 		m.loading = false
 		if typed.err != nil {
@@ -234,9 +243,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.params = typed.params
 		m.buildParamForm()
-		m.screen = screenParams
 		m.status = "Fill parameters. Choice fields support multi-select."
-		return m, tea.Batch(append(cmds, tea.ClearScreen)...)
+		return m, m.transition(screenParams, cmds...)
 	case runStreamStartedMsg:
 		m.runEvents = typed.ch
 		return m, waitRunEventCmd(m.runEvents)
@@ -247,14 +255,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.finished[typed.update.Index] = true
 		}
 		if len(m.finished) == len(m.runRecords) {
-			m.screen = screenDone
 			m.status = "All jobs finished"
-			return m, tea.Batch(append(cmds, tea.ClearScreen)...)
+			return m, m.transition(screenDone, cmds...)
 		}
 		return m, waitRunEventCmd(m.runEvents)
 	case runDoneMsg:
 		if m.screen == screenRun {
-			m.screen = screenDone
+			return m, m.transition(screenDone, cmds...)
 		}
 		return m, tea.Batch(cmds...)
 	}
@@ -303,8 +310,7 @@ func (m *model) updateServers(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) 
 			m.jobFolders = nil
 			m.jobs.ResetFilter()
 			m.jobs.SetItems(nil)
-			m.screen = screenJobs
-			return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(false))...)
+			return m, m.transition(screenJobs, append(cmds, m.loadCurrentFolderCmd(false))...)
 		case "q":
 			return m, tea.Quit
 		}
@@ -366,8 +372,7 @@ func (m *model) updateJobs(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 
 func (m *model) updateParams(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if km, ok := msg.(tea.KeyMsg); ok && km.String() == "esc" {
-		m.screen = screenJobs
-		return m, tea.Batch(cmds...)
+		return m, m.transition(screenJobs, cmds...)
 	}
 	if m.paramForm == nil {
 		return m, tea.Batch(cmds...)
@@ -385,8 +390,8 @@ func (m *model) updateParams(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		m.buildPreviewTable()
-		m.screen = screenPreview
 		m.status = fmt.Sprintf("%d permutations ready", len(m.permutations))
+		return m, m.transition(screenPreview, cmds...)
 	}
 	return m, tea.Batch(cmds...)
 }
@@ -399,10 +404,10 @@ func (m *model) updatePreview(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) 
 		switch km.String() {
 		case "enter":
 			m.startRun()
-			return m, tea.Batch(append(cmds, startRunCmd(m.runCtx, m.client, m.selectedJob.URL, m.permutations, concurrencyCap))...)
+			return m, m.transition(screenRun, append(cmds, startRunCmd(m.runCtx, m.client, m.selectedJob.URL, m.permutations, concurrencyCap))...)
 		case "esc", "backspace":
 			m.buildParamForm()
-			m.screen = screenParams
+			return m, m.transition(screenParams, cmds...)
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -428,7 +433,7 @@ func (m *model) updateRun(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 			if m.screen == screenDone {
 				m.rebuildFailedOnly()
 				m.buildPreviewTable()
-				m.screen = screenPreview
+				return m, m.transition(screenPreview, cmds...)
 			}
 		}
 	}
@@ -492,18 +497,18 @@ func (m *model) View() string {
 	}
 
 	// Keep footer anchored to bottom by clipping only the middle body area.
-	frameWidth := max(40, m.width-2)
-	innerHeight := max(8, m.height-4)
+	frameWidth := max(1, m.width)
+	innerHeight := max(1, m.height)
 	headerLines := []string{
-		ui.Title.Render(title),
+		fitLineToWidth(ui.Title.Render(title), frameWidth),
 		"",
 	}
 	footerLines := []string{
-		ui.Muted.Render(status),
-		ui.Help.Render(help),
+		fitLineToWidth(ui.Muted.Render(status), frameWidth),
+		fitLineToWidth(ui.Help.Render(help), frameWidth),
 	}
 	if errorLine != "" {
-		footerLines = append(footerLines, errorLine)
+		footerLines = append(footerLines, fitLineToWidth(errorLine, frameWidth))
 	}
 
 	headerHeight := len(headerLines)
@@ -512,10 +517,10 @@ func (m *model) View() string {
 	if bodyHeight < 1 {
 		bodyHeight = 1
 	}
-	body = fitToHeight(body, bodyHeight)
+	body = fitToBox(body, frameWidth, bodyHeight)
 
 	content := strings.Join(append(append(headerLines, body), footerLines...), "\n")
-	content = fitToHeight(content, innerHeight)
+	content = fitToBox(content, frameWidth, innerHeight)
 	return ui.AppBorder.Width(frameWidth).Render(content)
 }
 
@@ -607,7 +612,6 @@ func (m *model) buildPreviewTable() {
 }
 
 func (m *model) startRun() {
-	m.screen = screenRun
 	m.runRecords = make([]models.RunRecord, 0, len(m.permutations))
 	for i, spec := range m.permutations {
 		m.runRecords = append(m.runRecords, models.RunRecord{Index: i, Spec: spec, State: models.RunPlanned, StartedAt: time.Now()})
@@ -715,12 +719,19 @@ func summarizeParams(mv map[string]string) string {
 
 func (m *model) navigateUpJobs(cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if len(m.jobFolders) == 0 {
-		m.screen = screenServers
-		return m, tea.Batch(cmds...)
+		return m, m.transition(screenServers, cmds...)
 	}
 	m.jobs.ResetFilter()
 	m.jobFolders = m.jobFolders[:len(m.jobFolders)-1]
 	return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(false))...)
+}
+
+func (m *model) transition(next screen, cmds ...tea.Cmd) tea.Cmd {
+	if m.screen != next {
+		m.screen = next
+		cmds = append(cmds, tea.ClearScreen)
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) loadCurrentFolderCmd(forceRefresh bool) tea.Cmd {
@@ -824,13 +835,16 @@ func jobsPathLabel(prefix string) string {
 }
 
 func clip(s string, n int) string {
-	if n <= 0 || len(s) <= n {
+	if n <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= n {
 		return s
 	}
 	if n <= 3 {
-		return s[:n]
+		return lipgloss.NewStyle().MaxWidth(n).Render(s)
 	}
-	return s[:n-3] + "..."
+	return lipgloss.NewStyle().MaxWidth(n-3).Render(s) + "..."
 }
 
 func max(a, b int) int {
@@ -860,7 +874,10 @@ func defaultTableStyles(focused bool) table.Styles {
 	return styles
 }
 
-func fitToHeight(s string, height int) string {
+func fitToBox(s string, width, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
 	lines := strings.Split(s, "\n")
 	if len(lines) > height {
 		lines = lines[:height]
@@ -868,5 +885,20 @@ func fitToHeight(s string, height int) string {
 	if len(lines) < height {
 		lines = append(lines, make([]string, height-len(lines))...)
 	}
+	for i, line := range lines {
+		lines[i] = fitLineToWidth(line, width)
+	}
 	return strings.Join(lines, "\n")
+}
+
+func fitLineToWidth(line string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	clipped := lipgloss.NewStyle().MaxWidth(width).Render(line)
+	padding := width - lipgloss.Width(clipped)
+	if padding <= 0 {
+		return clipped
+	}
+	return clipped + strings.Repeat(" ", padding)
 }

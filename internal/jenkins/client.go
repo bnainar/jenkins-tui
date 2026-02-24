@@ -12,6 +12,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"jenkins-tui/internal/models"
@@ -21,6 +22,7 @@ type Client struct {
 	target models.JenkinsTarget
 	http   *http.Client
 	crumb  *crumb
+	mu     sync.RWMutex
 }
 
 type crumb struct {
@@ -192,8 +194,8 @@ func (c *Client) TriggerBuild(ctx context.Context, jobURL string, params map[str
 	}
 	req.SetBasicAuth(c.target.Username, c.target.Token)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	if c.crumb != nil {
-		req.Header.Set(c.crumb.Field, c.crumb.Value)
+	if field, value, ok := c.crumbHeader(); ok {
+		req.Header.Set(field, value)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -223,6 +225,7 @@ func (c *Client) ResolveQueue(ctx context.Context, queueURL string) (string, int
 	api := strings.TrimRight(queueURL, "/") + "/api/json"
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	consecutiveErrors := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -230,8 +233,13 @@ func (c *Client) ResolveQueue(ctx context.Context, queueURL string) (string, int
 		case <-ticker.C:
 			var q queueResp
 			if err := c.getJSON(ctx, api, &q); err != nil {
+				consecutiveErrors++
+				if consecutiveErrors >= 5 {
+					return "", 0, fmt.Errorf("resolve queue failed after %d retries: %w", consecutiveErrors, err)
+				}
 				continue
 			}
+			consecutiveErrors = 0
 			if q.Cancelled {
 				return "", 0, fmt.Errorf("queue item cancelled")
 			}
@@ -251,6 +259,7 @@ func (c *Client) PollBuild(ctx context.Context, buildURL string) (string, error)
 	api := strings.TrimRight(buildURL, "/") + "/api/json"
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
+	consecutiveErrors := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -258,8 +267,13 @@ func (c *Client) PollBuild(ctx context.Context, buildURL string) (string, error)
 		case <-ticker.C:
 			var b buildResp
 			if err := c.getJSON(ctx, api, &b); err != nil {
+				consecutiveErrors++
+				if consecutiveErrors >= 5 {
+					return "", fmt.Errorf("poll build failed after %d retries: %w", consecutiveErrors, err)
+				}
 				continue
 			}
+			consecutiveErrors = 0
 			if !b.Building {
 				if b.Result == "" {
 					return "UNKNOWN", nil
@@ -271,7 +285,7 @@ func (c *Client) PollBuild(ctx context.Context, buildURL string) (string, error)
 }
 
 func (c *Client) ensureCrumb(ctx context.Context) error {
-	if c.crumb != nil {
+	if _, _, ok := c.crumbHeader(); ok {
 		return nil
 	}
 	crumbURL := c.Host() + "/crumbIssuer/api/json"
@@ -282,23 +296,37 @@ func (c *Client) ensureCrumb(ctx context.Context) error {
 	req.SetBasicAuth(c.target.Username, c.target.Token)
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil
+		return fmt.Errorf("fetch crumb: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
 		return nil
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("fetch crumb failed (%d): %s", resp.StatusCode, string(body))
 	}
 	var cr crumb
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return nil
+		return fmt.Errorf("decode crumb response: %w", err)
 	}
 	if cr.Field != "" && cr.Value != "" {
-		c.crumb = &cr
+		c.mu.Lock()
+		if c.crumb == nil {
+			c.crumb = &cr
+		}
+		c.mu.Unlock()
 	}
 	return nil
+}
+
+func (c *Client) crumbHeader() (string, string, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.crumb == nil {
+		return "", "", false
+	}
+	return c.crumb.Field, c.crumb.Value, true
 }
 
 func (c *Client) getJSON(ctx context.Context, endpoint string, dst any) error {

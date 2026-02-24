@@ -22,41 +22,65 @@ func Run(ctx context.Context, client *jenkins.Client, jobURL string, specs []mod
 			defer wg.Done()
 			for idx := range jobs {
 				spec := specs[idx]
-				out <- models.RunUpdate{Index: idx, State: models.RunQueued}
+				if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunQueued}) {
+					return
+				}
 				queueURL, err := client.TriggerBuild(ctx, jobURL, spec.Params)
 				if err != nil {
-					out <- models.RunUpdate{Index: idx, State: models.RunError, Err: err, Done: true}
+					if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunError, Err: err, Done: true}) {
+						return
+					}
 					continue
 				}
-				out <- models.RunUpdate{Index: idx, State: models.RunQueued, QueueURL: queueURL}
+				if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunQueued, QueueURL: queueURL}) {
+					return
+				}
 
 				buildURL, num, err := client.ResolveQueue(ctx, queueURL)
 				if err != nil {
-					out <- models.RunUpdate{Index: idx, State: models.RunError, QueueURL: queueURL, Err: err, Done: true}
+					if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunError, QueueURL: queueURL, Err: err, Done: true}) {
+						return
+					}
 					continue
 				}
-				out <- models.RunUpdate{Index: idx, State: models.RunRunning, QueueURL: queueURL, BuildURL: buildURL, BuildNumber: num}
+				if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunRunning, QueueURL: queueURL, BuildURL: buildURL, BuildNumber: num}) {
+					return
+				}
 
 				result, err := client.PollBuild(ctx, buildURL)
 				if err != nil {
-					out <- models.RunUpdate{Index: idx, State: models.RunError, BuildURL: buildURL, BuildNumber: num, Err: err, Done: true}
+					if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: models.RunError, BuildURL: buildURL, BuildNumber: num, Err: err, Done: true}) {
+						return
+					}
 					continue
 				}
 				state := mapResult(result)
-				out <- models.RunUpdate{Index: idx, State: state, BuildURL: buildURL, BuildNumber: num, Result: result, Done: true}
+				if !emitUpdate(ctx, out, models.RunUpdate{Index: idx, State: state, BuildURL: buildURL, BuildNumber: num, Result: result, Done: true}) {
+					return
+				}
 			}
 		}()
 	}
 
+enqueueLoop:
 	for i := range specs {
 		select {
 		case <-ctx.Done():
-			break
+			break enqueueLoop
 		case jobs <- i:
 		}
 	}
 	close(jobs)
 	wg.Wait()
+}
+
+func emitUpdate(ctx context.Context, out chan<- models.RunUpdate, update models.RunUpdate) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case out <- update:
+		return true
+	}
 }
 
 func mapResult(result string) models.RunState {

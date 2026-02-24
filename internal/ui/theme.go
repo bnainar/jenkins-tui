@@ -3,10 +3,7 @@ package ui
 import "github.com/charmbracelet/lipgloss"
 
 var (
-	AppBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("63")).
-			Padding(1, 2)
+	AppBorder = lipgloss.NewStyle()
 
 	Title = lipgloss.NewStyle().
 		Bold(true).

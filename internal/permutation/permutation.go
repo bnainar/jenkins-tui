@@ -2,6 +2,7 @@ package permutation
 
 import (
 	"fmt"
+	"sort"
 
 	"jenkins-tui/internal/models"
 )
@@ -19,6 +20,7 @@ func Build(input Input, max int) ([]models.JobSpec, error) {
 		}
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 
 	if len(keys) == 0 {
 		spec := models.JobSpec{Params: copyMap(input.FixedValues)}
