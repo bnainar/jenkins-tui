@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 
@@ -49,16 +50,6 @@ func (c *Client) CacheKey() string {
 	return c.Host() + "|" + c.target.Username
 }
 
-func (c *Client) ListParameterizedJobs(ctx context.Context) ([]models.JobRef, error) {
-	root := c.Host()
-	seen := map[string]bool{}
-	var out []models.JobRef
-	if err := c.walkJobs(ctx, root, "", seen, &out); err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 type jobNodeResp struct {
 	Jobs []struct {
 		Name  string `json:"name"`
@@ -67,34 +58,43 @@ type jobNodeResp struct {
 	} `json:"jobs"`
 }
 
-func (c *Client) walkJobs(ctx context.Context, baseURL, prefix string, seen map[string]bool, out *[]models.JobRef) error {
+func (c *Client) ListJobNodes(ctx context.Context, baseURL, prefix string) ([]models.JobNode, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = c.Host()
+	}
 	api := strings.TrimRight(baseURL, "/") + "/api/json?tree=jobs[name,url,_class]"
 	var resp jobNodeResp
 	if err := c.getJSON(ctx, api, &resp); err != nil {
-		return err
+		return nil, err
 	}
+
+	seen := map[string]bool{}
+	out := make([]models.JobNode, 0, len(resp.Jobs))
 	for _, j := range resp.Jobs {
 		if seen[j.URL] {
 			continue
 		}
 		seen[j.URL] = true
 		full := strings.Trim(path.Join(prefix, j.Name), "/")
-		if strings.Contains(j.Class, "Folder") || strings.Contains(j.Class, "organization") || strings.Contains(j.Class, "WorkflowMultiBranch") {
-			if err := c.walkJobs(ctx, j.URL, full, seen, out); err != nil {
-				continue
-			}
-			continue
+		kind := models.JobNodeJob
+		if isFolderClass(j.Class) {
+			kind = models.JobNodeFolder
 		}
-		params, err := c.GetJobParams(ctx, j.URL)
-		if err != nil {
-			continue
-		}
-		if len(params) == 0 {
-			continue
-		}
-		*out = append(*out, models.JobRef{Name: j.Name, FullName: full, URL: j.URL})
+		out = append(out, models.JobNode{Name: j.Name, FullName: full, URL: j.URL, Kind: kind})
 	}
-	return nil
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind == models.JobNodeFolder
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, nil
+}
+
+func isFolderClass(class string) bool {
+	return strings.Contains(class, "Folder") ||
+		strings.Contains(class, "organization") ||
+		strings.Contains(class, "WorkflowMultiBranch")
 }
 
 type jobParamsResp struct {

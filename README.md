@@ -5,13 +5,13 @@
 ## What It Does
 
 - Loads Jenkins instances from local `jenkins.yaml`
-- Lets you pick a Jenkins host, then a parameterized pipeline
+- Lets you pick a Jenkins host, then browse folders/jobs lazily (Jenkins UI style)
 - Supports multi-select on Jenkins `Choice` params
 - Generates cartesian permutations (hard limit: `20` runs)
 - Executes all generated runs with concurrency `4`
 - Tracks queue/build status until completion
 - Shows build URLs and opens selected URL in browser (`o`)
-- Caches discovered jobs locally with a 24h TTL for faster startup
+- Caches folder listings locally with a 24h TTL for faster browsing
 
 ## Requirements
 
@@ -59,13 +59,14 @@ Note: when using `make run-docker`, opening URLs with `o` may not launch a brows
 ## TUI Flow
 
 1. Select Jenkins host
-2. Select pipeline job (press `/` to filter)
-3. Fill parameters
+2. Browse folders/jobs (press `/` to filter current folder)
+3. Open a parameterized job
+4. Fill parameters
 - `Choice` params: multi-select
 - Non-choice params: single value reused across all permutations
-4. Review generated permutations
-5. Press `Enter` to execute all
-6. Watch live progress and open links
+5. Review generated permutations
+6. Press `Enter` to execute all
+7. Watch live progress and open links
 
 ## Keybindings
 
@@ -77,6 +78,7 @@ List screens:
 - `/` start filter
 - `enter` select
 - `esc` back/clear
+- `r` refresh current jobs folder (jobs screen)
 
 Run screen:
 - `o` open selected build URL
@@ -89,7 +91,7 @@ Done screen:
 Job discovery cache is stored in Docker volume `jenkins-tui_app_cache` (`/root/.cache/jenkins-tui` inside the runtime container).
 
 - TTL: `24h`
-- Cache key: Jenkins `host + username`
+- Cache key: Jenkins `host + username + folder URL`
 
 ## Local Jenkins Dev Environment
 

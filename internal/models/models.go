@@ -21,6 +21,20 @@ type JobRef struct {
 	URL      string
 }
 
+type JobNodeKind string
+
+const (
+	JobNodeFolder JobNodeKind = "folder"
+	JobNodeJob    JobNodeKind = "job"
+)
+
+type JobNode struct {
+	Name     string
+	FullName string
+	URL      string
+	Kind     JobNodeKind
+}
+
 type ParamKind string
 
 const (

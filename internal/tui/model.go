@@ -40,19 +40,27 @@ const (
 )
 
 type listItem struct {
-	title string
-	desc  string
-	id    string
+	title    string
+	desc     string
+	id       string
+	name     string
+	fullName string
+	kind     models.JobNodeKind
 }
 
 func (i listItem) Title() string       { return i.title }
 func (i listItem) Description() string { return i.desc }
-func (i listItem) FilterValue() string { return i.title + " " + i.desc }
+func (i listItem) FilterValue() string {
+	return strings.TrimSpace(i.title + " " + i.desc + " " + i.fullName)
+}
 
 type jobsLoadedMsg struct {
-	jobs      []models.JobRef
-	fromCache bool
-	err       error
+	nodes        []models.JobNode
+	fromCache    bool
+	err          error
+	requestID    uint64
+	containerURL string
+	prefix       string
 }
 
 type paramsLoadedMsg struct {
@@ -90,6 +98,8 @@ type model struct {
 	target      *models.JenkinsTarget
 	client      *jenkins.Client
 	selectedJob *models.JobRef
+	jobFolders  []models.JobNode
+	jobsReqID   uint64
 
 	params       []models.ParamDef
 	paramForm    *huh.Form
@@ -122,7 +132,7 @@ func NewModel(ctx context.Context, cfg models.Config) tea.Model {
 	servers.SetFilteringEnabled(true)
 
 	jobs := list.New(nil, list.NewDefaultDelegate(), 0, 0)
-	jobs.Title = "Select Parameterized Pipeline"
+	jobs.Title = "Browse Jenkins Jobs"
 	jobs.SetFilteringEnabled(true)
 
 	spin := spinner.New()
@@ -173,23 +183,40 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	switch typed := msg.(type) {
 	case jobsLoadedMsg:
+		if typed.requestID != m.jobsReqID {
+			return m, tea.Batch(cmds...)
+		}
 		m.loading = false
 		if typed.err != nil {
 			m.err = typed.err
-			m.status = "Failed to load jobs"
+			m.status = fmt.Sprintf("Failed to load %s", jobsPathLabel(typed.prefix))
 			return m, tea.Batch(cmds...)
 		}
 		m.err = nil
 		if typed.fromCache {
-			m.status = fmt.Sprintf("Loaded %d parameterized jobs (cache, TTL 24h)", len(typed.jobs))
+			m.status = fmt.Sprintf("Loaded %d items from %s (cache, TTL 24h)", len(typed.nodes), jobsPathLabel(typed.prefix))
 		} else {
-			m.status = fmt.Sprintf("Loaded %d parameterized jobs", len(typed.jobs))
+			m.status = fmt.Sprintf("Loaded %d items from %s", len(typed.nodes), jobsPathLabel(typed.prefix))
 		}
-		items := make([]list.Item, 0, len(typed.jobs))
-		for _, j := range typed.jobs {
-			items = append(items, listItem{title: j.FullName, desc: j.URL, id: j.URL})
+		items := make([]list.Item, 0, len(typed.nodes))
+		for _, n := range typed.nodes {
+			title := n.Name
+			desc := "job"
+			if n.Kind == models.JobNodeFolder {
+				title += "/"
+				desc = "folder"
+			}
+			items = append(items, listItem{
+				title:    title,
+				desc:     desc,
+				id:       n.URL,
+				name:     n.Name,
+				fullName: n.FullName,
+				kind:     n.Kind,
+			})
 		}
 		m.jobs.SetItems(items)
+		m.jobs.Title = "Browse Jenkins Jobs: " + jobsPathLabel(typed.prefix)
 		m.screen = screenJobs
 		return m, tea.Batch(append(cmds, tea.ClearScreen)...)
 	case paramsLoadedMsg:
@@ -197,6 +224,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if typed.err != nil {
 			m.err = typed.err
 			m.status = "Failed to load parameters"
+			return m, tea.Batch(cmds...)
+		}
+		if len(typed.params) == 0 {
+			m.err = nil
+			m.selectedJob = nil
+			m.status = "Selected job is not parameterized or has unsupported parameter types"
 			return m, tea.Batch(cmds...)
 		}
 		m.params = typed.params
@@ -266,11 +299,12 @@ func (m *model) updateServers(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) 
 			}
 			m.target = t
 			m.client = jenkins.NewClient(*t, m.cfg.Timeout)
-			m.loading = true
-			m.loadingStart = time.Now()
-			m.loadingLabel = "Loading jobs"
-			m.status = "Loading jobs..."
-			return m, tea.Batch(append(cmds, loadJobsCmd(m.ctx, m.client))...)
+			m.selectedJob = nil
+			m.jobFolders = nil
+			m.jobs.ResetFilter()
+			m.jobs.SetItems(nil)
+			m.screen = screenJobs
+			return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(false))...)
 		case "q":
 			return m, tea.Quit
 		}
@@ -290,7 +324,21 @@ func (m *model) updateJobs(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, tea.Batch(cmds...)
 			}
-			job := models.JobRef{FullName: item.title, URL: item.id}
+			if item.kind == models.JobNodeFolder {
+				m.selectedJob = nil
+				m.jobs.ResetFilter()
+				m.jobFolders = append(m.jobFolders, models.JobNode{
+					Name:     item.name,
+					FullName: item.fullName,
+					URL:      item.id,
+					Kind:     models.JobNodeFolder,
+				})
+				return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(false))...)
+			}
+			if item.kind != models.JobNodeJob {
+				return m, tea.Batch(cmds...)
+			}
+			job := models.JobRef{Name: item.name, FullName: item.fullName, URL: item.id}
 			m.selectedJob = &job
 			m.loading = true
 			m.loadingStart = time.Now()
@@ -298,11 +346,19 @@ func (m *model) updateJobs(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 			m.status = "Loading pipeline parameters..."
 			return m, tea.Batch(append(cmds, loadParamsCmd(m.ctx, m.client, job.URL))...)
 		case "esc":
-			m.screen = screenServers
+			if m.jobs.SettingFilter() {
+				return m, tea.Batch(cmds...)
+			}
+			return m.navigateUpJobs(cmds)
 		case "backspace":
 			if !m.jobs.SettingFilter() {
-				m.screen = screenServers
+				return m.navigateUpJobs(cmds)
 			}
+		case "r":
+			if m.jobs.SettingFilter() {
+				return m, tea.Batch(cmds...)
+			}
+			return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(true))...)
 		}
 	}
 	return m, tea.Batch(cmds...)
@@ -385,7 +441,7 @@ func (m *model) View() string {
 	case screenServers:
 		body = m.servers.View()
 	case screenJobs:
-		body = ui.Muted.Render("Tip: press / to filter jobs, then Enter to apply filter.") + "\n\n" + m.jobs.View()
+		body = ui.Muted.Render("Path: "+jobsPathLabel(m.currentJobsPrefix())+" | enter: open folder/job | r: refresh current folder | /: filter") + "\n\n" + m.jobs.View()
 	case screenParams:
 		if m.paramForm != nil {
 			body = m.paramForm.View()
@@ -407,6 +463,9 @@ func (m *model) View() string {
 	}
 
 	help := "enter: select/continue | esc: back | q: quit"
+	if m.screen == screenJobs {
+		help = "enter: open folder/job | esc/backspace: up | r: refresh folder | q: quit"
+	}
 	if m.screen == screenRun || m.screen == screenDone {
 		help = "o: open build url | q: quit"
 		if m.screen == screenDone {
@@ -654,17 +713,81 @@ func summarizeParams(mv map[string]string) string {
 	return strings.Join(parts, ", ")
 }
 
-func loadJobsCmd(ctx context.Context, client *jenkins.Client) tea.Cmd {
+func (m *model) navigateUpJobs(cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if len(m.jobFolders) == 0 {
+		m.screen = screenServers
+		return m, tea.Batch(cmds...)
+	}
+	m.jobs.ResetFilter()
+	m.jobFolders = m.jobFolders[:len(m.jobFolders)-1]
+	return m, tea.Batch(append(cmds, m.loadCurrentFolderCmd(false))...)
+}
+
+func (m *model) loadCurrentFolderCmd(forceRefresh bool) tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	containerURL, prefix := m.currentJobsContainer()
+	m.jobsReqID++
+	reqID := m.jobsReqID
+	m.loading = true
+	m.loadingStart = time.Now()
+	action := "Loading"
+	if forceRefresh {
+		action = "Refreshing"
+	}
+	m.loadingLabel = fmt.Sprintf("%s %s", action, jobsPathLabel(prefix))
+	m.status = m.loadingLabel + "..."
+	return loadJobsCmd(m.ctx, m.client, containerURL, prefix, forceRefresh, reqID)
+}
+
+func (m *model) currentJobsContainer() (string, string) {
+	if m.client == nil {
+		return "", ""
+	}
+	if len(m.jobFolders) == 0 {
+		return m.client.Host(), ""
+	}
+	last := m.jobFolders[len(m.jobFolders)-1]
+	return last.URL, last.FullName
+}
+
+func (m *model) currentJobsPrefix() string {
+	_, prefix := m.currentJobsContainer()
+	return prefix
+}
+
+func loadJobsCmd(ctx context.Context, client *jenkins.Client, containerURL, prefix string, forceRefresh bool, requestID uint64) tea.Cmd {
 	return func() tea.Msg {
-		if jobs, ok, err := cache.Jobs(client.CacheKey()); err == nil && ok {
-			return jobsLoadedMsg{jobs: jobs, fromCache: true}
+		if !forceRefresh {
+			if nodes, ok, err := cache.JobNodes(client.CacheKey(), containerURL); err == nil && ok {
+				return jobsLoadedMsg{
+					nodes:        nodes,
+					fromCache:    true,
+					requestID:    requestID,
+					containerURL: containerURL,
+					prefix:       prefix,
+				}
+			}
 		}
-		jobs, err := client.ListParameterizedJobs(ctx)
+		nodes, err := client.ListJobNodes(ctx, containerURL, prefix)
 		if err != nil {
-			return jobsLoadedMsg{jobs: jobs, err: err}
+			return jobsLoadedMsg{
+				nodes:        nodes,
+				err:          err,
+				requestID:    requestID,
+				containerURL: containerURL,
+				prefix:       prefix,
+			}
 		}
-		_ = cache.SaveJobs(client.CacheKey(), jobs)
-		return jobsLoadedMsg{jobs: jobs, fromCache: false}
+		_ = cache.SaveJobNodes(client.CacheKey(), containerURL, nodes)
+		return jobsLoadedMsg{
+			nodes:        nodes,
+			fromCache:    false,
+			requestID:    requestID,
+			containerURL: containerURL,
+			prefix:       prefix,
+		}
 	}
 }
 
@@ -691,6 +814,13 @@ func waitRunEventCmd(ch <-chan models.RunUpdate) tea.Cmd {
 		}
 		return runEventMsg{update: update}
 	}
+}
+
+func jobsPathLabel(prefix string) string {
+	if strings.TrimSpace(prefix) == "" {
+		return "/"
+	}
+	return "/" + strings.TrimLeft(prefix, "/")
 }
 
 func clip(s string, n int) string {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"jenkins-tui/internal/models"
@@ -17,12 +18,12 @@ const (
 )
 
 type jobsCacheFile struct {
-	FetchedAt time.Time       `json:"fetched_at"`
-	Jobs      []models.JobRef `json:"jobs"`
+	FetchedAt time.Time        `json:"fetched_at"`
+	Nodes     []models.JobNode `json:"nodes"`
 }
 
-func Jobs(cacheKey string) ([]models.JobRef, bool, error) {
-	path, err := jobsPath(cacheKey)
+func JobNodes(cacheKey, containerURL string) ([]models.JobNode, bool, error) {
+	path, err := jobsPath(cacheKey, containerURL)
 	if err != nil {
 		return nil, false, err
 	}
@@ -40,11 +41,11 @@ func Jobs(cacheKey string) ([]models.JobRef, bool, error) {
 	if f.FetchedAt.IsZero() || time.Since(f.FetchedAt) > jobsTTL {
 		return nil, false, nil
 	}
-	return f.Jobs, true, nil
+	return f.Nodes, true, nil
 }
 
-func SaveJobs(cacheKey string, jobs []models.JobRef) error {
-	path, err := jobsPath(cacheKey)
+func SaveJobNodes(cacheKey, containerURL string, nodes []models.JobNode) error {
+	path, err := jobsPath(cacheKey, containerURL)
 	if err != nil {
 		return err
 	}
@@ -53,7 +54,7 @@ func SaveJobs(cacheKey string, jobs []models.JobRef) error {
 	}
 	payload := jobsCacheFile{
 		FetchedAt: time.Now().UTC(),
-		Jobs:      jobs,
+		Nodes:     nodes,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -62,12 +63,13 @@ func SaveJobs(cacheKey string, jobs []models.JobRef) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
-func jobsPath(cacheKey string) (string, error) {
+func jobsPath(cacheKey, containerURL string) (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {
 		return "", fmt.Errorf("resolve user cache dir: %w", err)
 	}
-	sum := sha1.Sum([]byte(cacheKey))
+	containerURL = strings.TrimRight(containerURL, "/")
+	sum := sha1.Sum([]byte(cacheKey + "|" + containerURL))
 	file := "jobs_" + hex.EncodeToString(sum[:]) + ".json"
 	return filepath.Join(base, "jenkins-tui", file), nil
 }
