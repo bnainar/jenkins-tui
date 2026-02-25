@@ -4,6 +4,14 @@ on:
   push:
     branches:
       - main
+    paths:
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - "Makefile"
+      - "jenkins.example.yaml"
+      - ".github/workflows/release-main.yml"
 
 permissions:
   contents: write
