@@ -27,7 +27,6 @@ printf '  export %s=%q\n' "$token_env" "$token" >&2
 cat <<YAML
 jenkins:
   - id: local
-    name: local
     host: $JENKINS_HOST
     username: $JENKINS_USER
     insecure_skip_tls_verify: false

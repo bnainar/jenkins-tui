@@ -4,7 +4,6 @@
 # Secrets are referenced from keyring or env; they are not stored in YAML.
 jenkins:
   - id: prod
-    name: prod
     host: https://jenkins.example.com
     username: your-user
     insecure_skip_tls_verify: false

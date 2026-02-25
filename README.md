@@ -41,7 +41,6 @@ Config format:
 ```yaml
 jenkins:
   - id: prod
-    name: prod
     host: https://jenkins.example.com
     username: your-user
     insecure_skip_tls_verify: false
@@ -49,6 +48,8 @@ jenkins:
       type: keyring
       ref: jenkins-tui/prod
 ```
+
+`name` is optional. When omitted, it defaults to the target `id`.
 
 ### Credential Types
 
@@ -70,6 +71,18 @@ On the server selection screen:
 - `t` rotate selected target token (keyring targets)
 - `d` delete selected target
 
+### Choice Multi-Select Shortcuts
+
+In parameter forms for Jenkins `Choice` fields:
+
+- `space` or `x` toggles the currently highlighted option
+- `ctrl+a` toggles select all / select none
+- `/` enters filter mode
+
+Filtering note:
+
+- When a filter is active, `ctrl+a` applies to currently visible (filtered) options.
+
 ## Cache
 
 Default cache path:
@@ -81,6 +94,10 @@ Override cache path:
 
 - Flag: `-cache-dir /absolute/path`
 - Env: `JENKINS_TUI_CACHE_DIR=/absolute/path`
+
+Version info:
+
+- `jenkins-tui -v` (or `jenkins-tui -version`) prints version, commit, and build time.
 
 Cache details:
 
