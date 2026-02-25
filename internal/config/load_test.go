@@ -13,7 +13,6 @@ func TestLoadValidConfig(t *testing.T) {
 	content := `
 jenkins:
   - id: prod
-    name: prod
     host: https://jenkins.example.com
     username: ci-user
     credential:
@@ -32,6 +31,9 @@ jenkins:
 	}
 	if cfg.Jenkins[0].ID != "prod" {
 		t.Fatalf("expected ID prod, got %q", cfg.Jenkins[0].ID)
+	}
+	if cfg.Jenkins[0].Name != "prod" {
+		t.Fatalf("expected name to default to ID prod, got %q", cfg.Jenkins[0].Name)
 	}
 }
 

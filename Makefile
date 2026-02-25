@@ -1,6 +1,10 @@
 GOFLAGS ?=
 BINARY ?= jenkins-tui
 PKG ?= ./cmd/jenkins-tui
+VERSION ?= dev
+GIT_COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS ?= -X main.version=$(VERSION) -X main.commit=$(GIT_COMMIT) -X main.buildDate=$(BUILD_DATE)
 TIMEOUT ?= 120s
 CONFIG ?=
 CACHE_DIR ?=
@@ -21,13 +25,13 @@ RUN_FLAGS = -timeout $(TIMEOUT) $(if $(CONFIG),-config $(CONFIG),) $(if $(CACHE_
 .PHONY: build run run-docker test tidy fmt clean docker-up docker-down docker-logs
 
 build:
-	$(DOCKER_RUN) sh -lc 'GOOS=$(HOST_OS) GOARCH=$(HOST_ARCH) $(DOCKER_GO_BIN) build $(GOFLAGS) -o $(BINARY) $(PKG)'
+	$(DOCKER_RUN) sh -lc 'GOOS=$(HOST_OS) GOARCH=$(HOST_ARCH) $(DOCKER_GO_BIN) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(BINARY) $(PKG)'
 
 run: build
 	./$(BINARY) $(RUN_FLAGS)
 
 run-docker:
-	$(DOCKER_RUN_BASE) -it $(DOCKER_GO_IMAGE) sh -lc 'unset NO_COLOR CI; export TERM=xterm-256color COLORTERM=truecolor CLICOLOR_FORCE=1; $(DOCKER_GO_BIN) run $(GOFLAGS) $(PKG) $(RUN_FLAGS)'
+	$(DOCKER_RUN_BASE) -it $(DOCKER_GO_IMAGE) sh -lc 'unset NO_COLOR CI; export TERM=xterm-256color COLORTERM=truecolor CLICOLOR_FORCE=1; $(DOCKER_GO_BIN) run $(GOFLAGS) -ldflags "$(LDFLAGS)" $(PKG) $(RUN_FLAGS)'
 
 test:
 	$(DOCKER_RUN) sh -lc '$(DOCKER_GO_BIN) test $(GOFLAGS) ./...'

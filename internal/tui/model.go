@@ -132,7 +132,6 @@ type model struct {
 	manageMode     manageMode
 	manageIndex    int
 	manageID       string
-	manageName     string
 	manageHost     string
 	manageUsername string
 	manageInsecure string
@@ -279,7 +278,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.params = typed.params
 		m.buildParamForm()
-		m.status = "Fill parameters. Choice fields support multi-select."
+		m.status = paramsStatusMessage()
 		return m, m.transition(screenParams, cmds...)
 	case runStreamStartedMsg:
 		m.runEvents = typed.ch
@@ -624,7 +623,6 @@ func (m *model) startManageForm(mode manageMode, idx int) {
 	m.manageMode = mode
 	m.manageIndex = idx
 	m.manageID = ""
-	m.manageName = ""
 	m.manageHost = ""
 	m.manageUsername = ""
 	m.manageInsecure = "false"
@@ -635,7 +633,6 @@ func (m *model) startManageForm(mode manageMode, idx int) {
 	if idx >= 0 && idx < len(m.cfg.Jenkins) {
 		t := m.cfg.Jenkins[idx]
 		m.manageID = t.ID
-		m.manageName = t.Name
 		m.manageHost = t.Host
 		m.manageUsername = t.Username
 		if t.InsecureSkipTLSVerify {
@@ -654,7 +651,6 @@ func (m *model) startManageForm(mode manageMode, idx int) {
 	} else {
 		fields = append(fields,
 			huh.NewInput().Title("ID").Description("Unique target ID").Value(&m.manageID),
-			huh.NewInput().Title("Name").Description("Display name").Value(&m.manageName),
 			huh.NewInput().Title("Host").Description("Jenkins base URL").Value(&m.manageHost),
 			huh.NewInput().Title("Username").Value(&m.manageUsername),
 			huh.NewSelect[string]().Title("Insecure TLS").Options(
@@ -673,6 +669,15 @@ func (m *model) startManageForm(mode manageMode, idx int) {
 }
 
 func (m *model) applyManageForm() error {
+	var previous *models.JenkinsTarget
+	if m.manageMode == manageModeEdit {
+		if m.manageIndex < 0 || m.manageIndex >= len(m.cfg.Jenkins) {
+			return fmt.Errorf("invalid target selection")
+		}
+		prev := m.cfg.Jenkins[m.manageIndex]
+		previous = &prev
+	}
+
 	switch m.manageMode {
 	case manageModeRotate:
 		if m.manageIndex < 0 || m.manageIndex >= len(m.cfg.Jenkins) {
@@ -693,18 +698,12 @@ func (m *model) applyManageForm() error {
 		return nil
 	}
 
-	target, err := m.buildTargetFromForm()
+	target, err := m.buildTargetFromForm(previous)
 	if err != nil {
 		return err
 	}
 
-	var previous *models.JenkinsTarget
 	if m.manageMode == manageModeEdit {
-		if m.manageIndex < 0 || m.manageIndex >= len(m.cfg.Jenkins) {
-			return fmt.Errorf("invalid target selection")
-		}
-		prev := m.cfg.Jenkins[m.manageIndex]
-		previous = &prev
 		for i := range m.cfg.Jenkins {
 			if i != m.manageIndex && m.cfg.Jenkins[i].ID == target.ID {
 				return fmt.Errorf("target ID %q already exists", target.ID)
@@ -759,9 +758,8 @@ func (m *model) applyManageForm() error {
 	return nil
 }
 
-func (m *model) buildTargetFromForm() (models.JenkinsTarget, error) {
+func (m *model) buildTargetFromForm(previous *models.JenkinsTarget) (models.JenkinsTarget, error) {
 	id := strings.TrimSpace(m.manageID)
-	name := strings.TrimSpace(m.manageName)
 	host := strings.TrimRight(strings.TrimSpace(m.manageHost), "/")
 	username := strings.TrimSpace(m.manageUsername)
 	credType := models.CredentialType(strings.TrimSpace(m.manageCredType))
@@ -778,8 +776,14 @@ func (m *model) buildTargetFromForm() (models.JenkinsTarget, error) {
 	case credType != models.CredentialTypeKeyring && credType != models.CredentialTypeEnv:
 		return models.JenkinsTarget{}, fmt.Errorf("credential type must be %q or %q", models.CredentialTypeKeyring, models.CredentialTypeEnv)
 	}
-	if name == "" {
-		name = host
+
+	name := id
+	if previous != nil {
+		prevName := strings.TrimSpace(previous.Name)
+		prevID := strings.TrimSpace(previous.ID)
+		if prevName != "" && prevName != prevID {
+			name = prevName
+		}
 	}
 	return models.JenkinsTarget{
 		ID:       id,
@@ -862,22 +866,7 @@ func (m *model) View() string {
 		title += " | " + m.selectedJob.FullName
 	}
 
-	help := "enter: select/continue | m: manage targets | esc: back | q: quit"
-	if m.screen == screenJobs {
-		help = "enter: open folder/job | esc/backspace: up | r: refresh folder | q: quit"
-	}
-	if m.screen == screenManageTargets {
-		help = "a: add | e/enter: edit | t: rotate token | d: delete | esc: back | q: quit"
-	}
-	if m.screen == screenManageForm {
-		help = "enter: submit form | esc: cancel | q: quit"
-	}
-	if m.screen == screenRun || m.screen == screenDone {
-		help = "o: open build url | q: quit"
-		if m.screen == screenDone {
-			help += " | r: rerun failed"
-		}
-	}
+	help := helpTextForScreen(m.screen, m.screen == screenDone)
 	status := m.status
 	if status == "" {
 		status = "Ready"
@@ -1233,6 +1222,31 @@ func jobsPathLabel(prefix string) string {
 		return "/"
 	}
 	return "/" + strings.TrimLeft(prefix, "/")
+}
+
+func paramsStatusMessage() string {
+	return "Fill parameters. Choice fields support multi-select; ctrl+a toggles select all/none."
+}
+
+func helpTextForScreen(current screen, runDone bool) string {
+	switch current {
+	case screenJobs:
+		return "enter: open folder/job | esc/backspace: up | r: refresh folder | q: quit"
+	case screenParams:
+		return "space/x: toggle | ctrl+a: select all/none | /: filter | shift+tab: back | enter: continue | q: quit"
+	case screenManageTargets:
+		return "a: add | e/enter: edit | t: rotate token | d: delete | esc: back | q: quit"
+	case screenManageForm:
+		return "enter: submit form | esc: cancel | q: quit"
+	case screenRun, screenDone:
+		help := "o: open build url | q: quit"
+		if runDone {
+			help += " | r: rerun failed"
+		}
+		return help
+	default:
+		return "enter: select/continue | m: manage targets | esc: back | q: quit"
+	}
 }
 
 func clip(s string, n int) string {

@@ -43,7 +43,7 @@ func Load(path string) (models.Config, error) {
 			return cfg, fmt.Errorf("jenkins[%d].credential.ref is required", i)
 		}
 		if strings.TrimSpace(t.Name) == "" {
-			cfg.Jenkins[i].Name = t.Host
+			cfg.Jenkins[i].Name = id
 		}
 		cfg.Jenkins[i].ID = id
 		cfg.Jenkins[i].Host = strings.TrimRight(strings.TrimSpace(t.Host), "/")
