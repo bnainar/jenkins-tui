@@ -20,6 +20,7 @@ import (
 
 type Client struct {
 	target models.JenkinsTarget
+	token  string
 	http   *http.Client
 	crumb  *crumb
 	mu     sync.RWMutex
@@ -30,13 +31,14 @@ type crumb struct {
 	Value string `json:"crumb"`
 }
 
-func NewClient(target models.JenkinsTarget, timeout time.Duration) *Client {
+func NewClient(target models.JenkinsTarget, token string, timeout time.Duration) *Client {
 	transport := &http.Transport{}
 	if target.InsecureSkipTLSVerify {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
 	}
 	return &Client{
 		target: target,
+		token:  token,
 		http: &http.Client{
 			Timeout:   timeout,
 			Transport: transport,
@@ -192,7 +194,7 @@ func (c *Client) TriggerBuild(ctx context.Context, jobURL string, params map[str
 	if err != nil {
 		return "", err
 	}
-	req.SetBasicAuth(c.target.Username, c.target.Token)
+	req.SetBasicAuth(c.target.Username, c.token)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if field, value, ok := c.crumbHeader(); ok {
 		req.Header.Set(field, value)
@@ -293,7 +295,7 @@ func (c *Client) ensureCrumb(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(c.target.Username, c.target.Token)
+	req.SetBasicAuth(c.target.Username, c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("fetch crumb: %w", err)
@@ -334,7 +336,7 @@ func (c *Client) getJSON(ctx context.Context, endpoint string, dst any) error {
 	if err != nil {
 		return err
 	}
-	req.SetBasicAuth(c.target.Username, c.target.Token)
+	req.SetBasicAuth(c.target.Username, c.token)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		return err

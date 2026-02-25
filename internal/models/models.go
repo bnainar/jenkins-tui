@@ -2,17 +2,32 @@ package models
 
 import "time"
 
+type CredentialType string
+
+const (
+	CredentialTypeKeyring CredentialType = "keyring"
+	CredentialTypeEnv     CredentialType = "env"
+)
+
+type Credential struct {
+	Type CredentialType `yaml:"type"`
+	Ref  string         `yaml:"ref"`
+}
+
 type JenkinsTarget struct {
-	Name                  string `yaml:"name"`
-	Host                  string `yaml:"host"`
-	Username              string `yaml:"username"`
-	Token                 string `yaml:"token"`
-	InsecureSkipTLSVerify bool   `yaml:"insecure_skip_tls_verify"`
+	ID                    string     `yaml:"id"`
+	Name                  string     `yaml:"name"`
+	Host                  string     `yaml:"host"`
+	Username              string     `yaml:"username"`
+	Credential            Credential `yaml:"credential"`
+	InsecureSkipTLSVerify bool       `yaml:"insecure_skip_tls_verify"`
 }
 
 type Config struct {
-	Jenkins []JenkinsTarget `yaml:"jenkins"`
-	Timeout time.Duration   `yaml:"-"`
+	Jenkins    []JenkinsTarget `yaml:"jenkins"`
+	Timeout    time.Duration   `yaml:"-"`
+	ConfigPath string          `yaml:"-"`
+	CacheDir   string          `yaml:"-"`
 }
 
 type JobRef struct {

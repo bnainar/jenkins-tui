@@ -19,12 +19,19 @@ resp=$(curl -fsS -b "$cookie_jar" -u "$JENKINS_USER:$JENKINS_PASS" \
   --data-urlencode "newTokenName=$TOKEN_NAME")
 
 token=$(echo "$resp" | sed -E 's/.*"tokenValue"\s*:\s*"([^"]+)".*/\1/')
+token_env="${TOKEN_ENV_NAME:-JENKINS_TUI_LOCAL_TOKEN}"
 
 echo "Generated token for $JENKINS_USER" >&2
+echo "Export token for env-backed credential:" >&2
+printf '  export %s=%q\n' "$token_env" "$token" >&2
 cat <<YAML
 jenkins:
-  - name: local
+  - id: local
+    name: local
     host: $JENKINS_HOST
     username: $JENKINS_USER
-    token: $token
+    insecure_skip_tls_verify: false
+    credential:
+      type: env
+      ref: $token_env
 YAML

@@ -16,6 +16,8 @@ import (
 
 	"jenkins-tui/internal/browser"
 	"jenkins-tui/internal/cache"
+	"jenkins-tui/internal/config"
+	"jenkins-tui/internal/credentials"
 	"jenkins-tui/internal/executor"
 	"jenkins-tui/internal/jenkins"
 	"jenkins-tui/internal/models"
@@ -32,6 +34,8 @@ const (
 	screenPreview
 	screenRun
 	screenDone
+	screenManageTargets
+	screenManageForm
 )
 
 const (
@@ -78,9 +82,18 @@ type runEventMsg struct {
 
 type runDoneMsg struct{}
 
+type manageMode int
+
+const (
+	manageModeAdd manageMode = iota
+	manageModeEdit
+	manageModeRotate
+)
+
 type model struct {
-	ctx context.Context
-	cfg models.Config
+	ctx   context.Context
+	cfg   models.Config
+	creds *credentials.Manager
 
 	width  int
 	height int
@@ -94,6 +107,7 @@ type model struct {
 
 	servers list.Model
 	jobs    list.Model
+	manage  list.Model
 
 	target      *models.JenkinsTarget
 	client      *jenkins.Client
@@ -114,20 +128,23 @@ type model struct {
 	runCtx       context.Context
 	runCancel    context.CancelFunc
 
+	manageForm     *huh.Form
+	manageMode     manageMode
+	manageIndex    int
+	manageID       string
+	manageName     string
+	manageHost     string
+	manageUsername string
+	manageInsecure string
+	manageCredType string
+	manageCredRef  string
+	manageToken    string
+
 	spin spinner.Model
 }
 
 func NewModel(ctx context.Context, cfg models.Config) tea.Model {
-	items := make([]list.Item, 0, len(cfg.Jenkins))
-	for idx, j := range cfg.Jenkins {
-		desc := j.Username
-		if strings.TrimSpace(desc) == "" {
-			desc = j.Host
-		}
-		items = append(items, listItem{title: fmt.Sprintf("%d. %s", idx+1, j.Name), desc: desc, id: j.Host})
-	}
-
-	servers := list.New(items, list.NewDefaultDelegate(), 0, 0)
+	servers := list.New(nil, list.NewDefaultDelegate(), 0, 0)
 	servers.Title = "Select Jenkins"
 	servers.SetFilteringEnabled(true)
 
@@ -135,19 +152,34 @@ func NewModel(ctx context.Context, cfg models.Config) tea.Model {
 	jobs.Title = "Browse Jenkins Jobs"
 	jobs.SetFilteringEnabled(true)
 
+	manage := list.New(nil, list.NewDefaultDelegate(), 0, 0)
+	manage.Title = "Manage Jenkins Targets"
+	manage.SetFilteringEnabled(true)
+
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
-	return &model{
-		ctx:        ctx,
-		cfg:        cfg,
-		screen:     screenServers,
-		servers:    servers,
-		jobs:       jobs,
-		choiceVars: map[string]*[]string{},
-		fixedVars:  map[string]*string{},
-		finished:   map[int]bool{},
-		spin:       spin,
+	m := &model{
+		ctx:            ctx,
+		cfg:            cfg,
+		creds:          credentials.NewManager(),
+		screen:         screenServers,
+		servers:        servers,
+		jobs:           jobs,
+		manage:         manage,
+		choiceVars:     map[string]*[]string{},
+		fixedVars:      map[string]*string{},
+		finished:       map[int]bool{},
+		spin:           spin,
+		manageInsecure: "false",
+		manageCredType: string(models.CredentialTypeKeyring),
+		manageIndex:    -1,
 	}
+	m.refreshServerItems()
+	m.refreshManageItems()
+	if len(cfg.Jenkins) == 0 {
+		m.status = "No Jenkins targets configured. Press m to add one."
+	}
+	return m
 }
 
 func (m *model) Init() tea.Cmd {
@@ -164,8 +196,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.servers.SetSize(max(0, msg.Width-8), max(0, msg.Height-10))
 		m.jobs.SetSize(max(0, msg.Width-8), max(0, msg.Height-10))
+		m.manage.SetSize(max(0, msg.Width-8), max(0, msg.Height-10))
 		if m.paramForm != nil {
 			m.paramForm.WithWidth(max(1, msg.Width-8))
+		}
+		if m.manageForm != nil {
+			m.manageForm.WithWidth(max(1, msg.Width-8))
 		}
 		if len(m.permutations) > 0 {
 			m.buildPreviewTable()
@@ -277,6 +313,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updatePreview(msg, cmds)
 	case screenRun, screenDone:
 		return m.updateRun(msg, cmds)
+	case screenManageTargets:
+		return m.updateManageTargets(msg, cmds)
+	case screenManageForm:
+		return m.updateManageForm(msg, cmds)
 	default:
 		return m, tea.Batch(cmds...)
 	}
@@ -294,23 +334,29 @@ func (m *model) updateServers(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) 
 			if !ok {
 				return m, tea.Batch(cmds...)
 			}
-			var t *models.JenkinsTarget
-			for i := range m.cfg.Jenkins {
-				if m.cfg.Jenkins[i].Host == item.id {
-					t = &m.cfg.Jenkins[i]
-					break
-				}
-			}
+			t := m.findTargetByID(item.id)
 			if t == nil {
 				return m, tea.Batch(cmds...)
 			}
+			token, err := m.creds.Resolve(*t)
+			if err != nil {
+				m.err = err
+				m.status = "Failed to resolve target credentials"
+				return m, tea.Batch(cmds...)
+			}
+			m.err = nil
 			m.target = t
-			m.client = jenkins.NewClient(*t, m.cfg.Timeout)
+			m.client = jenkins.NewClient(*t, token, m.cfg.Timeout)
 			m.selectedJob = nil
 			m.jobFolders = nil
 			m.jobs.ResetFilter()
 			m.jobs.SetItems(nil)
 			return m, m.transition(screenJobs, append(cmds, m.loadCurrentFolderCmd(false))...)
+		case "m":
+			m.refreshManageItems()
+			m.err = nil
+			m.status = "Manage targets: a add, e edit, t rotate token, d delete"
+			return m, m.transition(screenManageTargets, cmds...)
 		case "q":
 			return m, tea.Quit
 		}
@@ -440,11 +486,360 @@ func (m *model) updateRun(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m *model) updateManageTargets(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
+	m.manage, cmd = m.manage.Update(msg)
+	cmds = append(cmds, cmd)
+	km, ok := msg.(tea.KeyMsg)
+	if !ok {
+		return m, tea.Batch(cmds...)
+	}
+	switch km.String() {
+	case "esc":
+		if m.manage.SettingFilter() {
+			return m, tea.Batch(cmds...)
+		}
+		m.refreshServerItems()
+		return m, m.transition(screenServers, cmds...)
+	case "backspace":
+		if m.manage.SettingFilter() {
+			return m, tea.Batch(cmds...)
+		}
+		m.refreshServerItems()
+		return m, m.transition(screenServers, cmds...)
+	case "a":
+		m.startManageForm(manageModeAdd, -1)
+		return m, m.transition(screenManageForm, cmds...)
+	case "enter", "e":
+		idx := m.selectedManageTargetIndex()
+		if idx < 0 {
+			return m, tea.Batch(cmds...)
+		}
+		m.startManageForm(manageModeEdit, idx)
+		return m, m.transition(screenManageForm, cmds...)
+	case "t":
+		idx := m.selectedManageTargetIndex()
+		if idx < 0 {
+			return m, tea.Batch(cmds...)
+		}
+		m.startManageForm(manageModeRotate, idx)
+		return m, m.transition(screenManageForm, cmds...)
+	case "d":
+		idx := m.selectedManageTargetIndex()
+		if idx < 0 {
+			return m, tea.Batch(cmds...)
+		}
+		if err := m.deleteTargetAt(idx); err != nil {
+			m.err = err
+			m.status = "Failed to delete target"
+		} else {
+			m.err = nil
+			m.status = "Deleted target"
+		}
+		return m, tea.Batch(cmds...)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m *model) updateManageForm(msg tea.Msg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if km, ok := msg.(tea.KeyMsg); ok {
+		if km.String() == "esc" {
+			m.manageForm = nil
+			return m, m.transition(screenManageTargets, cmds...)
+		}
+	}
+	if m.manageForm == nil {
+		return m, m.transition(screenManageTargets, cmds...)
+	}
+	updated, cmd := m.manageForm.Update(msg)
+	if f, ok := updated.(*huh.Form); ok {
+		m.manageForm = f
+	}
+	cmds = append(cmds, cmd)
+	if m.manageForm.State != huh.StateCompleted {
+		return m, tea.Batch(cmds...)
+	}
+	if err := m.applyManageForm(); err != nil {
+		m.err = err
+		m.status = "Failed to save target"
+		m.startManageForm(m.manageMode, m.manageIndex)
+		return m, tea.Batch(cmds...)
+	}
+	m.manageForm = nil
+	m.err = nil
+	m.refreshManageItems()
+	m.refreshServerItems()
+	return m, m.transition(screenManageTargets, cmds...)
+}
+
+func (m *model) refreshServerItems() {
+	items := make([]list.Item, 0, len(m.cfg.Jenkins))
+	for idx, j := range m.cfg.Jenkins {
+		desc := strings.TrimSpace(fmt.Sprintf("%s | %s", j.Username, j.Host))
+		items = append(items, listItem{
+			title: fmt.Sprintf("%d. %s", idx+1, j.Name),
+			desc:  desc,
+			id:    j.ID,
+		})
+	}
+	m.servers.SetItems(items)
+}
+
+func (m *model) refreshManageItems() {
+	items := make([]list.Item, 0, len(m.cfg.Jenkins))
+	for _, j := range m.cfg.Jenkins {
+		items = append(items, listItem{
+			title: j.Name,
+			desc:  fmt.Sprintf("%s (%s) [%s:%s]", j.Host, j.Username, j.Credential.Type, j.Credential.Ref),
+			id:    j.ID,
+		})
+	}
+	m.manage.SetItems(items)
+}
+
+func (m *model) findTargetByID(id string) *models.JenkinsTarget {
+	for i := range m.cfg.Jenkins {
+		if m.cfg.Jenkins[i].ID == id {
+			return &m.cfg.Jenkins[i]
+		}
+	}
+	return nil
+}
+
+func (m *model) selectedManageTargetIndex() int {
+	selected := m.manage.SelectedItem()
+	item, ok := selected.(listItem)
+	if !ok {
+		return -1
+	}
+	for i := range m.cfg.Jenkins {
+		if m.cfg.Jenkins[i].ID == item.id {
+			return i
+		}
+	}
+	return -1
+}
+
+func (m *model) startManageForm(mode manageMode, idx int) {
+	m.manageMode = mode
+	m.manageIndex = idx
+	m.manageID = ""
+	m.manageName = ""
+	m.manageHost = ""
+	m.manageUsername = ""
+	m.manageInsecure = "false"
+	m.manageCredType = string(models.CredentialTypeKeyring)
+	m.manageCredRef = ""
+	m.manageToken = ""
+
+	if idx >= 0 && idx < len(m.cfg.Jenkins) {
+		t := m.cfg.Jenkins[idx]
+		m.manageID = t.ID
+		m.manageName = t.Name
+		m.manageHost = t.Host
+		m.manageUsername = t.Username
+		if t.InsecureSkipTLSVerify {
+			m.manageInsecure = "true"
+		}
+		m.manageCredType = string(t.Credential.Type)
+		m.manageCredRef = t.Credential.Ref
+	}
+
+	fields := make([]huh.Field, 0)
+	if mode == manageModeRotate {
+		fields = append(fields,
+			huh.NewNote().Title("Rotate Token").Description("Enter a new token for this target's keyring reference."),
+			huh.NewInput().Title("Token").Value(&m.manageToken),
+		)
+	} else {
+		fields = append(fields,
+			huh.NewInput().Title("ID").Description("Unique target ID").Value(&m.manageID),
+			huh.NewInput().Title("Name").Description("Display name").Value(&m.manageName),
+			huh.NewInput().Title("Host").Description("Jenkins base URL").Value(&m.manageHost),
+			huh.NewInput().Title("Username").Value(&m.manageUsername),
+			huh.NewSelect[string]().Title("Insecure TLS").Options(
+				huh.NewOption("false", "false"),
+				huh.NewOption("true", "true"),
+			).Value(&m.manageInsecure),
+			huh.NewSelect[string]().Title("Credential Type").Options(
+				huh.NewOption(string(models.CredentialTypeKeyring), string(models.CredentialTypeKeyring)),
+				huh.NewOption(string(models.CredentialTypeEnv), string(models.CredentialTypeEnv)),
+			).Value(&m.manageCredType),
+			huh.NewInput().Title("Credential Ref").Description("Keyring item name or environment variable").Value(&m.manageCredRef),
+			huh.NewInput().Title("Token").Description("Required when adding keyring targets or rotating keyring refs").Value(&m.manageToken),
+		)
+	}
+	m.manageForm = huh.NewForm(huh.NewGroup(fields...)).WithWidth(max(60, m.width-8))
+}
+
+func (m *model) applyManageForm() error {
+	switch m.manageMode {
+	case manageModeRotate:
+		if m.manageIndex < 0 || m.manageIndex >= len(m.cfg.Jenkins) {
+			return fmt.Errorf("invalid target selection")
+		}
+		target := m.cfg.Jenkins[m.manageIndex]
+		if target.Credential.Type != models.CredentialTypeKeyring {
+			return fmt.Errorf("token rotation is only available for keyring-backed credentials")
+		}
+		token := strings.TrimSpace(m.manageToken)
+		if token == "" {
+			return fmt.Errorf("token is required")
+		}
+		if err := m.creds.SetKeyring(target.Credential.Ref, token); err != nil {
+			return fmt.Errorf("store keyring token: %w", err)
+		}
+		m.status = "Token rotated"
+		return nil
+	}
+
+	target, err := m.buildTargetFromForm()
+	if err != nil {
+		return err
+	}
+
+	var previous *models.JenkinsTarget
+	if m.manageMode == manageModeEdit {
+		if m.manageIndex < 0 || m.manageIndex >= len(m.cfg.Jenkins) {
+			return fmt.Errorf("invalid target selection")
+		}
+		prev := m.cfg.Jenkins[m.manageIndex]
+		previous = &prev
+		for i := range m.cfg.Jenkins {
+			if i != m.manageIndex && m.cfg.Jenkins[i].ID == target.ID {
+				return fmt.Errorf("target ID %q already exists", target.ID)
+			}
+		}
+	}
+	if m.manageMode == manageModeAdd {
+		if m.findTargetByID(target.ID) != nil {
+			return fmt.Errorf("target ID %q already exists", target.ID)
+		}
+	}
+
+	if target.Credential.Type == models.CredentialTypeKeyring {
+		token := strings.TrimSpace(m.manageToken)
+		switch {
+		case m.manageMode == manageModeAdd && token == "":
+			return fmt.Errorf("token is required for keyring credentials")
+		case m.manageMode == manageModeEdit && token == "" &&
+			(previous == nil || previous.Credential.Type != models.CredentialTypeKeyring || previous.Credential.Ref != target.Credential.Ref):
+			return fmt.Errorf("token is required when changing keyring credential ref")
+		case token != "":
+			if err := m.creds.SetKeyring(target.Credential.Ref, token); err != nil {
+				return fmt.Errorf("store keyring token: %w", err)
+			}
+		}
+	}
+
+	previousTargets := append([]models.JenkinsTarget(nil), m.cfg.Jenkins...)
+	var deleteOldKeyringRef string
+	if m.manageMode == manageModeAdd {
+		m.cfg.Jenkins = append(m.cfg.Jenkins, target)
+	} else {
+		m.cfg.Jenkins[m.manageIndex] = target
+		if previous != nil && previous.Credential.Type == models.CredentialTypeKeyring &&
+			(previous.Credential.Ref != target.Credential.Ref || target.Credential.Type != models.CredentialTypeKeyring) {
+			deleteOldKeyringRef = previous.Credential.Ref
+		}
+	}
+
+	if err := m.persistConfig(); err != nil {
+		m.cfg.Jenkins = previousTargets
+		return err
+	}
+	if deleteOldKeyringRef != "" {
+		_ = m.creds.DeleteKeyring(deleteOldKeyringRef)
+	}
+	if m.manageMode == manageModeAdd {
+		m.status = "Added target"
+	} else {
+		m.status = "Updated target"
+	}
+	return nil
+}
+
+func (m *model) buildTargetFromForm() (models.JenkinsTarget, error) {
+	id := strings.TrimSpace(m.manageID)
+	name := strings.TrimSpace(m.manageName)
+	host := strings.TrimRight(strings.TrimSpace(m.manageHost), "/")
+	username := strings.TrimSpace(m.manageUsername)
+	credType := models.CredentialType(strings.TrimSpace(m.manageCredType))
+	credRef := strings.TrimSpace(m.manageCredRef)
+	switch {
+	case id == "":
+		return models.JenkinsTarget{}, fmt.Errorf("id is required")
+	case host == "":
+		return models.JenkinsTarget{}, fmt.Errorf("host is required")
+	case username == "":
+		return models.JenkinsTarget{}, fmt.Errorf("username is required")
+	case credRef == "":
+		return models.JenkinsTarget{}, fmt.Errorf("credential ref is required")
+	case credType != models.CredentialTypeKeyring && credType != models.CredentialTypeEnv:
+		return models.JenkinsTarget{}, fmt.Errorf("credential type must be %q or %q", models.CredentialTypeKeyring, models.CredentialTypeEnv)
+	}
+	if name == "" {
+		name = host
+	}
+	return models.JenkinsTarget{
+		ID:       id,
+		Name:     name,
+		Host:     host,
+		Username: username,
+		Credential: models.Credential{
+			Type: credType,
+			Ref:  credRef,
+		},
+		InsecureSkipTLSVerify: m.manageInsecure == "true",
+	}, nil
+}
+
+func (m *model) deleteTargetAt(idx int) error {
+	if idx < 0 || idx >= len(m.cfg.Jenkins) {
+		return fmt.Errorf("invalid target selection")
+	}
+	target := m.cfg.Jenkins[idx]
+	if target.Credential.Type == models.CredentialTypeKeyring {
+		_ = m.creds.DeleteKeyring(target.Credential.Ref)
+	}
+	next := make([]models.JenkinsTarget, 0, len(m.cfg.Jenkins)-1)
+	next = append(next, m.cfg.Jenkins[:idx]...)
+	next = append(next, m.cfg.Jenkins[idx+1:]...)
+	m.cfg.Jenkins = next
+	if m.target != nil && m.target.ID == target.ID {
+		m.target = nil
+		m.client = nil
+		m.jobFolders = nil
+		m.selectedJob = nil
+	}
+	if err := m.persistConfig(); err != nil {
+		return err
+	}
+	m.refreshManageItems()
+	m.refreshServerItems()
+	return nil
+}
+
+func (m *model) persistConfig() error {
+	if strings.TrimSpace(m.cfg.ConfigPath) == "" {
+		return fmt.Errorf("config path is not set")
+	}
+	return config.Save(m.cfg.ConfigPath, m.cfg)
+}
+
 func (m *model) View() string {
 	body := ""
 	switch m.screen {
 	case screenServers:
 		body = m.servers.View()
+	case screenManageTargets:
+		body = m.manage.View()
+	case screenManageForm:
+		if m.manageForm != nil {
+			body = m.manageForm.View()
+		} else {
+			body = "No form loaded"
+		}
 	case screenJobs:
 		body = ui.Muted.Render("Path: "+jobsPathLabel(m.currentJobsPrefix())+" | enter: open folder/job | r: refresh current folder | /: filter") + "\n\n" + m.jobs.View()
 	case screenParams:
@@ -467,9 +862,15 @@ func (m *model) View() string {
 		title += " | " + m.selectedJob.FullName
 	}
 
-	help := "enter: select/continue | esc: back | q: quit"
+	help := "enter: select/continue | m: manage targets | esc: back | q: quit"
 	if m.screen == screenJobs {
 		help = "enter: open folder/job | esc/backspace: up | r: refresh folder | q: quit"
+	}
+	if m.screen == screenManageTargets {
+		help = "a: add | e/enter: edit | t: rotate token | d: delete | esc: back | q: quit"
+	}
+	if m.screen == screenManageForm {
+		help = "enter: submit form | esc: cancel | q: quit"
 	}
 	if m.screen == screenRun || m.screen == screenDone {
 		help = "o: open build url | q: quit"
@@ -749,7 +1150,7 @@ func (m *model) loadCurrentFolderCmd(forceRefresh bool) tea.Cmd {
 	}
 	m.loadingLabel = fmt.Sprintf("%s %s", action, jobsPathLabel(prefix))
 	m.status = m.loadingLabel + "..."
-	return loadJobsCmd(m.ctx, m.client, containerURL, prefix, forceRefresh, reqID)
+	return loadJobsCmd(m.ctx, m.cfg.CacheDir, m.client, containerURL, prefix, forceRefresh, reqID)
 }
 
 func (m *model) currentJobsContainer() (string, string) {
@@ -768,10 +1169,10 @@ func (m *model) currentJobsPrefix() string {
 	return prefix
 }
 
-func loadJobsCmd(ctx context.Context, client *jenkins.Client, containerURL, prefix string, forceRefresh bool, requestID uint64) tea.Cmd {
+func loadJobsCmd(ctx context.Context, cacheDir string, client *jenkins.Client, containerURL, prefix string, forceRefresh bool, requestID uint64) tea.Cmd {
 	return func() tea.Msg {
 		if !forceRefresh {
-			if nodes, ok, err := cache.JobNodes(client.CacheKey(), containerURL); err == nil && ok {
+			if nodes, ok, err := cache.JobNodesInDir(cacheDir, client.CacheKey(), containerURL); err == nil && ok {
 				return jobsLoadedMsg{
 					nodes:        nodes,
 					fromCache:    true,
@@ -791,7 +1192,7 @@ func loadJobsCmd(ctx context.Context, client *jenkins.Client, containerURL, pref
 				prefix:       prefix,
 			}
 		}
-		_ = cache.SaveJobNodes(client.CacheKey(), containerURL, nodes)
+		_ = cache.SaveJobNodesInDir(cacheDir, client.CacheKey(), containerURL, nodes)
 		return jobsLoadedMsg{
 			nodes:        nodes,
 			fromCache:    false,

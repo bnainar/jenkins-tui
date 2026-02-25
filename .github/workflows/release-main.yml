@@ -1,0 +1,152 @@
+name: release-main
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Compute version metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          ts="$(date -u +%Y%m%d%H%M)"
+          sha="$(git rev-parse --short HEAD)"
+          version="0.0.0-${ts}-${sha}"
+          tag="main-${ts}-${sha}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Build release artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
+            goos="${target%/*}"
+            goarch="${target#*/}"
+            archive="jenkins-tui_${{ steps.meta.outputs.version }}_${goos}_${goarch}.tar.gz"
+            CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags "-s -w" -o dist/jenkins-tui ./cmd/jenkins-tui
+            tar -C dist -czf "dist/${archive}" jenkins-tui
+            rm -f dist/jenkins-tui
+          done
+          (cd dist && sha256sum *.tar.gz > checksums.txt)
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.meta.outputs.tag }}"
+          title="jenkins-tui ${{ steps.meta.outputs.version }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.tar.gz dist/checksums.txt --clobber
+          else
+            gh release create "$tag" dist/*.tar.gz dist/checksums.txt --title "$title" --notes "Automated release from main."
+          fi
+
+      - name: Extract checksums
+        id: sums
+        run: |
+          set -euo pipefail
+          version="${{ steps.meta.outputs.version }}"
+          sha_darwin_arm64="$(awk '/jenkins-tui_'"$version"'_darwin_arm64\.tar\.gz/ {print $1}' dist/checksums.txt)"
+          sha_darwin_amd64="$(awk '/jenkins-tui_'"$version"'_darwin_amd64\.tar\.gz/ {print $1}' dist/checksums.txt)"
+          sha_linux_arm64="$(awk '/jenkins-tui_'"$version"'_linux_arm64\.tar\.gz/ {print $1}' dist/checksums.txt)"
+          sha_linux_amd64="$(awk '/jenkins-tui_'"$version"'_linux_amd64\.tar\.gz/ {print $1}' dist/checksums.txt)"
+          echo "sha_darwin_arm64=$sha_darwin_arm64" >> "$GITHUB_OUTPUT"
+          echo "sha_darwin_amd64=$sha_darwin_amd64" >> "$GITHUB_OUTPUT"
+          echo "sha_linux_arm64=$sha_linux_arm64" >> "$GITHUB_OUTPUT"
+          echo "sha_linux_amd64=$sha_linux_amd64" >> "$GITHUB_OUTPUT"
+
+      - name: Bootstrap tap and update formula
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
+            echo "HOMEBREW_TAP_TOKEN is required" >&2
+            exit 1
+          fi
+
+          repo="${{ github.repository }}"
+          tag="${{ steps.meta.outputs.tag }}"
+          version="${{ steps.meta.outputs.version }}"
+          tap_repo="bnainar/homebrew-tap"
+
+          workdir="$(mktemp -d)"
+          trap 'rm -rf "$workdir"' EXIT
+          cd "$workdir"
+
+          git init tap >/dev/null
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add origin "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${tap_repo}.git"
+
+          if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            git fetch origin main
+            git checkout -B main origin/main
+          else
+            git checkout -B main
+            mkdir -p Formula
+            printf '# homebrew-tap\n\nHomebrew tap for jenkins-tui.\n' > README.md
+            touch Formula/.keep
+            git add README.md Formula/.keep
+            git commit -m "chore: bootstrap tap"
+            git push -u origin main
+          fi
+
+          mkdir -p Formula
+          cat <<RUBY | sed 's/^          //' > Formula/jenkins-tui.rb
+          class JenkinsTui < Formula
+            desc "Terminal UI for running Jenkins parameterized pipelines in bulk"
+            homepage "https://github.com/${repo}"
+            version "${version}"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/${repo}/releases/download/${tag}/jenkins-tui_${version}_darwin_arm64.tar.gz"
+                sha256 "${{ steps.sums.outputs.sha_darwin_arm64 }}"
+              else
+                url "https://github.com/${repo}/releases/download/${tag}/jenkins-tui_${version}_darwin_amd64.tar.gz"
+                sha256 "${{ steps.sums.outputs.sha_darwin_amd64 }}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/${repo}/releases/download/${tag}/jenkins-tui_${version}_linux_arm64.tar.gz"
+                sha256 "${{ steps.sums.outputs.sha_linux_arm64 }}"
+              else
+                url "https://github.com/${repo}/releases/download/${tag}/jenkins-tui_${version}_linux_amd64.tar.gz"
+                sha256 "${{ steps.sums.outputs.sha_linux_amd64 }}"
+              end
+            end
+
+            def install
+              bin.install "jenkins-tui"
+            end
+          end
+          RUBY
+
+          git add Formula/jenkins-tui.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "jenkins-tui ${version}"
+            git push origin main
+          else
+            echo "No formula changes to push"
+          fi

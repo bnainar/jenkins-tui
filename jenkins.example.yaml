@@ -1,8 +1,13 @@
-# Copy to jenkins.yaml and fill in your Jenkins host and API token.
-# jenkins.yaml is git-ignored.
+# Copy this file to your config path:
+#   macOS/Linux default: $XDG_CONFIG_HOME/jenkins-tui/jenkins.yaml
+#   fallback default: ~/.config/jenkins-tui/jenkins.yaml
+# Secrets are referenced from keyring or env; they are not stored in YAML.
 jenkins:
-  - name: prod
+  - id: prod
+    name: prod
     host: https://jenkins.example.com
     username: your-user
-    token: your-api-token
     insecure_skip_tls_verify: false
+    credential:
+      type: keyring
+      ref: jenkins-tui/prod

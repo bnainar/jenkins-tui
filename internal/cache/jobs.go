@@ -23,7 +23,11 @@ type jobsCacheFile struct {
 }
 
 func JobNodes(cacheKey, containerURL string) ([]models.JobNode, bool, error) {
-	path, err := jobsPath(cacheKey, containerURL)
+	return JobNodesInDir("", cacheKey, containerURL)
+}
+
+func JobNodesInDir(cacheDir, cacheKey, containerURL string) ([]models.JobNode, bool, error) {
+	path, err := jobsPath(cacheDir, cacheKey, containerURL)
 	if err != nil {
 		return nil, false, err
 	}
@@ -45,7 +49,11 @@ func JobNodes(cacheKey, containerURL string) ([]models.JobNode, bool, error) {
 }
 
 func SaveJobNodes(cacheKey, containerURL string, nodes []models.JobNode) error {
-	path, err := jobsPath(cacheKey, containerURL)
+	return SaveJobNodesInDir("", cacheKey, containerURL, nodes)
+}
+
+func SaveJobNodesInDir(cacheDir, cacheKey, containerURL string, nodes []models.JobNode) error {
+	path, err := jobsPath(cacheDir, cacheKey, containerURL)
 	if err != nil {
 		return err
 	}
@@ -63,13 +71,16 @@ func SaveJobNodes(cacheKey, containerURL string, nodes []models.JobNode) error {
 	return os.WriteFile(path, b, 0o644)
 }
 
-func jobsPath(cacheKey, containerURL string) (string, error) {
-	base, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve user cache dir: %w", err)
+func jobsPath(cacheDir, cacheKey, containerURL string) (string, error) {
+	if strings.TrimSpace(cacheDir) == "" {
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve user cache dir: %w", err)
+		}
+		cacheDir = filepath.Join(base, "jenkins-tui")
 	}
 	containerURL = strings.TrimRight(containerURL, "/")
 	sum := sha1.Sum([]byte(cacheKey + "|" + containerURL))
 	file := "jobs_" + hex.EncodeToString(sum[:]) + ".json"
-	return filepath.Join(base, "jenkins-tui", file), nil
+	return filepath.Join(cacheDir, file), nil
 }
