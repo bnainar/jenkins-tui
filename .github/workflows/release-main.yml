@@ -75,6 +75,7 @@ jobs:
       - name: Bootstrap tap and update formula
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_USER: bnainar
         run: |
           set -euo pipefail
           if [ -z "${HOMEBREW_TAP_TOKEN:-}" ]; then
@@ -95,7 +96,12 @@ jobs:
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git remote add origin "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${tap_repo}.git"
+          auth_remote="https://${HOMEBREW_TAP_USER}:${HOMEBREW_TAP_TOKEN}@github.com/${tap_repo}.git"
+          if ! git ls-remote --heads "$auth_remote" >/dev/null 2>&1; then
+            echo "HOMEBREW_TAP_TOKEN cannot access ${tap_repo}. Expected a PAT with read/write access to that repo." >&2
+            exit 1
+          fi
+          git remote add origin "$auth_remote"
 
           if git ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
             git fetch origin main
