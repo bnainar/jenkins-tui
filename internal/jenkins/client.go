@@ -54,12 +54,28 @@ func (c *Client) CacheKey() string {
 	return c.Host() + "|" + c.target.Username
 }
 
+func (c *Client) ValidateConnection(ctx context.Context) error {
+	// Lightweight auth check used by target setup before persisting config.
+	var payload map[string]any
+	return c.getJSON(ctx, c.Host()+"/api/json", &payload)
+}
+
 type jobNodeResp struct {
 	Jobs []struct {
 		Name  string `json:"name"`
 		URL   string `json:"url"`
 		Class string `json:"_class"`
 	} `json:"jobs"`
+}
+
+type openSearchSuggestResp []any
+
+type suggestResp struct {
+	Suggestions []struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		URL  string `json:"url"`
+	} `json:"suggestions"`
 }
 
 func (c *Client) ListJobNodes(ctx context.Context, baseURL, prefix string) ([]models.JobNode, error) {
@@ -93,6 +109,105 @@ func (c *Client) ListJobNodes(ctx context.Context, baseURL, prefix string) ([]mo
 		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
 	})
 	return out, nil
+}
+
+func (c *Client) SearchJobs(ctx context.Context, query string, limit int) ([]models.JobNode, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return []models.JobNode{}, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	nodes, err := c.searchJobsOpenSearch(ctx, q, limit)
+	if err == nil {
+		return nodes, nil
+	}
+	return c.searchJobsSuggest(ctx, q, limit)
+}
+
+func (c *Client) searchJobsOpenSearch(ctx context.Context, query string, limit int) ([]models.JobNode, error) {
+	endpoint := c.Host() + "/search/suggestOpenSearch?q=" + url.QueryEscape(query)
+	var resp openSearchSuggestResp
+	if err := c.getJSON(ctx, endpoint, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp) < 4 {
+		return []models.JobNode{}, nil
+	}
+	names, _ := resp[1].([]any)
+	paths, _ := resp[2].([]any)
+	urls, _ := resp[3].([]any)
+	return normalizeSearchResults(c.Host(), names, paths, urls, limit), nil
+}
+
+func (c *Client) searchJobsSuggest(ctx context.Context, query string, limit int) ([]models.JobNode, error) {
+	endpoint := c.Host() + "/search/suggest?query=" + url.QueryEscape(query)
+	var resp suggestResp
+	if err := c.getJSON(ctx, endpoint, &resp); err != nil {
+		return nil, err
+	}
+	names := make([]any, 0, len(resp.Suggestions))
+	paths := make([]any, 0, len(resp.Suggestions))
+	urls := make([]any, 0, len(resp.Suggestions))
+	for _, s := range resp.Suggestions {
+		names = append(names, s.Name)
+		paths = append(paths, s.Path)
+		urls = append(urls, s.URL)
+	}
+	return normalizeSearchResults(c.Host(), names, paths, urls, limit), nil
+}
+
+func normalizeSearchResults(host string, names, paths, rawURLs []any, limit int) []models.JobNode {
+	out := make([]models.JobNode, 0, limit)
+	seen := map[string]bool{}
+	for i := 0; i < len(rawURLs) && len(out) < limit; i++ {
+		u, ok := rawURLs[i].(string)
+		if !ok || strings.TrimSpace(u) == "" {
+			continue
+		}
+		abs := absolutizeURL(host, u)
+		if !strings.Contains(abs, "/job/") || seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		name := stringAt(names, i)
+		full := strings.Trim(stringAt(paths, i), "/")
+		if full == "" {
+			full = name
+		}
+		out = append(out, models.JobNode{
+			Name:     name,
+			FullName: full,
+			URL:      abs,
+			Kind:     models.JobNodeJob,
+		})
+	}
+	return out
+}
+
+func stringAt(items []any, idx int) string {
+	if idx < 0 || idx >= len(items) {
+		return ""
+	}
+	s, _ := items[idx].(string)
+	return s
+}
+
+func absolutizeURL(host, raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		return trimmed
+	}
+	base, err := url.Parse(strings.TrimRight(host, "/"))
+	if err != nil {
+		return trimmed
+	}
+	rel, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	return base.ResolveReference(rel).String()
 }
 
 func isFolderClass(class string) bool {
