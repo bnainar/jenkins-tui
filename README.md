@@ -2,6 +2,13 @@
 
 `jenkins-tui` is a terminal UI for running Jenkins parameterized pipelines in bulk using value permutations.
 
+It also exposes a small headless CLI for automation-oriented discovery and triggering:
+
+- `list`
+- `search`
+- `params`
+- `trigger`
+
 ## Install (Homebrew)
 
 Tap and install:
@@ -98,6 +105,63 @@ Override cache path:
 Version info:
 
 - `jenkins-tui -v` (or `jenkins-tui -version`) prints version, commit, and build time.
+
+## Headless CLI
+
+The default mode is still the interactive TUI. For non-interactive use, call one of the explicit subcommands below.
+
+### List folders and jobs
+
+List the Jenkins root:
+
+```bash
+jenkins-tui list --target prod --json
+```
+
+List a specific folder:
+
+```bash
+jenkins-tui list \
+  --target prod \
+  --url "https://jenkins.example.com/job/App-v1/job/Operations" \
+  --prefix "App-v1/Operations" \
+  --json
+```
+
+### Search jobs
+
+```bash
+jenkins-tui search --target prod --query BullBoardConfigUpdate --limit 10 --json
+```
+
+`search` depends on Jenkins suggest endpoints. If expected jobs are missing, use folder `list` traversal instead.
+
+### Inspect job parameters
+
+```bash
+jenkins-tui params \
+  --target prod \
+  --job "https://jenkins.example.com/job/App-v1/job/Operations/job/BullBoardConfigUpdate" \
+  --json
+```
+
+### Trigger a job
+
+```bash
+jenkins-tui trigger \
+  --target prod \
+  --job "https://jenkins.example.com/job/App-v1/job/Operations/job/BullBoardConfigUpdate" \
+  --param region=CA-CANADA \
+  --param reason="config update" \
+  --wait \
+  --json
+```
+
+Notes:
+
+- `trigger` expects a full Jenkins job URL.
+- `params` and `list` are read-only.
+- `trigger` submits a real Jenkins build.
 
 Cache details:
 
